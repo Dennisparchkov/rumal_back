@@ -333,6 +333,7 @@ class Command(BaseCommand):
             raise
 
         r = re.search(r'\[MongoDB\] Analysis ID: ([a-z0-9]+)\b', stdout)
+		print r
         if r:
             logger.info("[{}] Got ObjectID: {}".format(task.id, r.group(1)))
             analysis = self.club_collections(r.group(1))
@@ -343,7 +344,7 @@ class Command(BaseCommand):
             return final_id
         else:
             logger.error("[{}] Unable to get MongoDB analysis ID for the current task".format(task.id))
-            raise InvalidMongoIdException("Unable to get MongoDB analysis ID for the current task")
+            raise InvalidMongoIdException("Unable to get MongoDB analysis ID for the current task" + r)
 
 
 
