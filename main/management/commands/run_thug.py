@@ -242,6 +242,7 @@ class Command(BaseCommand):
             "-a", "stdin",
             "-a", "stdout",
             "-a", "stderr",
+            "-it",
             "pdelsante/thug-dockerfile",
             "/usr/bin/python", "/opt/thug/src/thug.py"
             ]
