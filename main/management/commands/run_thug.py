@@ -243,6 +243,7 @@ class Command(BaseCommand):
             "-a", "stdout",
             "-a", "stderr",
             "-t",
+            "-i", 
             "pdelsante/thug-dockerfile",
             "/usr/bin/python", "/opt/thug/src/thug.py"
             ]
@@ -333,8 +334,8 @@ class Command(BaseCommand):
             raise
 
         r = re.search(r'\[MongoDB\] Analysis ID: ([a-z0-9]+)\b', stdout)
-        logger.error(stdout)
-        logger.error(stderr)
+        logger.debug(stdout)
+        logger.debug(stderr)
         if r:
             logger.info("[{}] Got ObjectID: {}".format(task.id, r.group(1)))
             analysis = self.club_collections(r.group(1))
