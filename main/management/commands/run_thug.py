@@ -332,8 +332,8 @@ class Command(BaseCommand):
             raise
 
         r = re.search(r'\[MongoDB\] Analysis ID: ([a-z0-9]+)\b', stdout)
-        logger.debug(stdout)
-        logger.debug(stderr)
+        logger.debug("stdout"+stdout)
+        logger.debug("stderr"+stderr)
         if r:
             logger.info("[{}] Got ObjectID: {}".format(task.id, r.group(1)))
             analysis = self.club_collections(r.group(1))
