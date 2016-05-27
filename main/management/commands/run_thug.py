@@ -237,6 +237,7 @@ class Command(BaseCommand):
     def run_task(self, task):
         # Initialize args list for docker
         args = [
+            "unbuffer",
             "/usr/bin/sudo", "/usr/bin/docker", "run",
             "--rm",
             "-a", "stdin",
