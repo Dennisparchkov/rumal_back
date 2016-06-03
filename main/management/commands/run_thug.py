@@ -28,6 +28,8 @@ import subprocess
 import time
 import tldextract
 import socket
+import docker
+import requests
 
 from datetime import datetime
 from urlparse import urlparse
@@ -205,117 +207,129 @@ class Command(BaseCommand):
 
 
     def run_task(self, task):
-        # Initialize args list for docker
-        args = [
-            "unbuffer",
-            "/usr/bin/sudo", "/usr/bin/docker", "run",
-            "--rm",
-            "-a", "stdin",
-            "-a", "stdout",
-            "-a", "stderr",
-            "-it",
-            "pdelsante/thug-dockerfile",
-            "/usr/bin/python", "/opt/thug/src/thug.py"
-            ]
-
-        # Need to discover the host's docker0 IP address
-        # to be used to tell Thug where MongoDB resides
-        # FIXME: read this from a static config file before
-        # guessing.
         try:
+            # Connect to docker interface
+            docker_client = docker.Client(base_url='unix://var/run/docker.sock')
+
+            # pull thug if it doesnt exists already
+            if not any(["pdelsante/thug-dockerfile:latest"] in s.values() for s in docker_client.images()):
+                docker_client.pull('pdelsante/thug-dockerfile', stream=True)
+
+            image = 'pdelsante/thug-dockerfile'
+            # Base command
+            command = ['/usr/bin/python', '/opt/thug/src/thug.py']
+
+            # docker interface Ip address
             d0_address = netifaces.ifaddresses('docker0')[netifaces.AF_INET][0]['addr']
-            args.extend(['-D', '{}:27017'.format(d0_address)])
-        except:
+            command.extend(['-D', '{}:27017'.format(d0_address)])
+
+            # Base options
+            if task.referer:
+                command.extend(['-r', task.referer])
+            if task.useragent:
+                command.extend(['-u', task.useragent])
+
+            # Proxy
+            if task.proxy:
+                command.extend(['-p', str(task.proxy)])
+
+            # Other options
+            if task.events:
+                command.extend(['-e', task.events])
+            if task.delay:
+                command.extend(['-w', task.delay])
+            if task.timeout:
+                command.extend(['-T', task.timeout])
+            if task.threshold:
+                command.extend(['-t', task.threshold])
+            if task.no_cache:
+                command.extend(['-m'])
+            if task.extensive:
+                command.extend(['-E'])
+            if task.broken_url:
+                command.extend(['-B'])
+
+            # Logging
+            if task.verbose:
+                command.extend(['-v'])
+            elif task.quiet:
+                command.extend(['-q'])
+            if task.debug:
+                command.extend(['-d'])
+                if task.ast_debug:
+                    command.extend(['-a'])
+            if task.http_debug:
+                command.extend(['-g'])
+
+            # External services
+            if task.vtquery:
+                command.extend(['-y'])
+            if task.vtsubmit:
+                command.extend(['-s'])
+            if task.no_honeyagent:
+                command.extend(['-N'])
+
+            # Plugins
+            if task.no_adobepdf:
+                command.extend(['-P'])
+            elif task.adobepdf:
+                command.extend(['-A', task.adobepdf])
+            if task.no_shockwave:
+                command.extend(['-R'])
+            elif task.shockwave:
+                command.extend(['-S', task.shockwave])
+            if task.no_javaplugin:
+                command.extend(['-K'])
+            elif task.javaplugin:
+                command.extend(['-J', task.javaplugin])
+
+            # Add URL to args
+            command.append(task.url)
+            logger.debug("[{}] Will run command: {}".format(task.id, " ".join(command)))
+
+            # Run container
+            container = docker_client.create_container(image=image,
+                                                       stdin_open=True,
+                                                       tty=True,
+                                                       command=command
+                                                       )
+            docker_client.start(container=container.get('Id'))
+
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(10 * 60)  # 10 minutes
+            # Get logs
+            stdout = ""
+            stderr = ""
+            for char in docker_client.attach(container=container, stdout=True, stderr=False, stream=True):
+                stdout = stdout + str(char)
+            for char in docker_client.attach(container=container, stdout=False, stderr=True, stream=True):
+                stderr = stderr + str(char)
+
+            signal.alarm(0)  # reset timer
+
+            # Find Mongo ID
+            r = re.search(r'\[MongoDB\] Analysis ID: ([a-z0-9]+)\b', stdout)
+            if r:
+                logger.info("[{}] Got ObjectID: {}".format(task.id, r.group(1)))
+                analysis = self.club_collections(r.group(1))
+                analysis = self.make_flat_tree(analysis, r.group(1))
+                analysis["frontend_id"] = str(task.frontend_id)
+                print analysis
+                final_id = db.analysiscombo.insert(analysis)
+                return final_id
+            else:
+                logger.error("[{}] Unable to get MongoDB analysis ID for the current task".format(task.id))
+                raise InvalidMongoIdException("Unable to get MongoDB analysis ID for the current task")
+
+        except requests.exceptions.ConnectionError:
             logger.critical("Unable to get docker0 address, aborting")
             raise
-
-        # Base options
-        if task.referer:
-            args.extend(['-r', task.referer])
-        if task.useragent:
-            args.extend(['-u', task.useragent])
-
-        # Proxy
-        if task.proxy:
-            args.extend(['-p', str(task.proxy)])
-
-        # Other options
-        if task.events:
-            args.extend(['-e', task.events])
-        if task.delay:
-            args.extend(['-w', task.delay])
-        if task.timeout:
-            args.extend(['-T', task.timeout])
-        if task.threshold:
-            args.extend(['-t', task.threshold])
-        if task.no_cache:
-            args.extend(['-m'])
-        if task.extensive:
-            args.extend(['-E'])
-        if task.broken_url:
-            args.extend(['-B'])
-
-        # Logging
-        if task.verbose:
-            args.extend(['-v'])
-        elif task.quiet:
-            args.extend(['-q'])
-        if task.debug:
-            args.extend(['-d'])
-            if task.ast_debug:
-                args.extend(['-a'])
-        if task.http_debug:
-            args.extend(['-g'])
-
-        # External services
-        if task.vtquery:
-            args.extend(['-y'])
-        if task.vtsubmit:
-            args.extend(['-s'])
-        if task.no_honeyagent:
-            args.extend(['-N'])
-
-        # Plugins
-        if task.no_adobepdf:
-            args.extend(['-P'])
-        elif task.adobepdf:
-            args.extend(['-A', task.adobepdf])
-        if task.no_shockwave:
-            args.extend(['-R'])
-        elif task.shockwave:
-            args.extend(['-S', task.shockwave])
-        if task.no_javaplugin:
-            args.extend(['-K'])
-        elif task.javaplugin:
-            args.extend(['-J', task.javaplugin])
-
-        # Add URL to args
-        args.append(task.url)
-
-        logger.debug("[{}] Will run command: {}".format(task.id, " ".join(args)))
-        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(10*60) # 10 minutes
-        try:
-            stdout, stderr = p.communicate()
-            signal.alarm(0)  # reset the alarm
         except TimeoutException:
             logger.error("[{}] Execution was taking too long, killed".format(task.id))
             raise
-
-        r = re.search(r'\[MongoDB\] Analysis ID: ([a-z0-9]+)\b', stdout)
-        if r:
-            logger.info("[{}] Got ObjectID: {}".format(task.id, r.group(1)))
-            analysis = self.club_collections(r.group(1))
-            analysis = self.make_flat_tree(analysis,r.group(1))
-            analysis["frontend_id"] = str(task.frontend_id)
-            print analysis
-            final_id = db.analysiscombo.insert(analysis)
-            return final_id
-        else:
-            logger.error("[{}] Unable to get MongoDB analysis ID for the current task".format(task.id))
-            raise InvalidMongoIdException("Unable to get MongoDB analysis ID for the current task")
-
+        except Exception:
+            logger.error("Error")
+            raise
 
 
     def handle(self, *args, **options):
